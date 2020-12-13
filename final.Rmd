@@ -16,15 +16,197 @@ This is an R Markdown document. Markdown is a simple formatting syntax for autho
 When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
 
 ```{r cars}
-summary(cars)
+set.seed(108)
+library(leaps)
+# Splitting data
+originalData <- read.table("diabetes.txt", header = TRUE, sep = " ")
+sampledRows <- sort(sample(1:nrow(originalData), round(0.3 * nrow(originalData))))
+data <- originalData[sampledRows,]
+validationData <- originalData[!(1:nrow(originalData) %in% sampledRows), ]
+
+
+
+# Input:
+#   data: a dataframe containing all the data available
+#   allCols: a vector containing all column indicies that will need to 
+#       be extracted
+#   categoricalCols: a vector containing all column indicies that are
+#       considered as categories
+#   interactions: a matrix with each row representing a set of column
+#       indicies that are to be combined for interaction. NOTE: Only n x 2
+#       matrices are currently supported but an n x m version can be
+#       achieved with just a few changes.
+# Output:
+#   A design matrix
+getDesignMatrix <- function(data, allCols = cbind(), categoricalCols = cbind(), interactions = cbind()) {
+    output <- 1
+    for (i in allCols) {
+        if (i %in% categoricalCols) {
+            # make a column for each category
+            categories <- unique(data[,i])
+            for (category in categories[1:length(categories)-1]) {
+                output <- cbind(output, as.numeric(data[,i] == category))
+                colnames(output)[ncol(output)] <- paste("is", toString(category), sep = "")
+            }
+        } else {
+            output <- cbind(output, data[,i])
+            colnames(output)[ncol(output)] <- colnames(data)[i]
+        }
+    }
+    colnames(output)[1] <- ""
+    if (length(interactions)) {
+        for (k in range(1, nrow(interactions))) {
+            i <- interactions[k,1]
+            j <- interactions[k,2]
+            if ((i %in% categoricalCols) && (j %in% categoricalCols)) {
+                iCategories <- unique(data[, i])
+                jCategories <- unique(data[, j])
+                for (iCategory in iCategories[1:length(iCategories)-1]) {
+                    for (jCategory in jCategories[1:length(jCategories)-1]) {
+                        output <- cbind(output, as.numeric(data[,i] == iCategory && data[,j] == jCategory))
+                        colnames(output)[ncol(output)] <- paste(
+                            "is", 
+                            toString(iCategory), 
+                            "and", 
+                            toString(jCategory), 
+                            sep = ""
+                            )
+                    }
+                }
+            } else if (i %in% categoricalCols) {
+                categories <- unique(data[,i])
+                for (category in categories[1:length(categories)-1]) {
+                    output <- cbind(output, as.numeric(data[,i] == category) * data[,j])
+                    colnames(output)[ncol(output)] <- paste(
+                        "is", 
+                        toString(category), 
+                        "*", 
+                        colnames(data)[j], 
+                        sep = ""
+                        )
+                }
+            } else if (j %in% categoricalCols) {
+                categories <- unique(data[,j])
+                for (category in categories[1:length(categories)-1]) {
+                    output <- cbind(output, as.numeric(data[,j] == category) * data[,i])
+                    colnames(output)[ncol(output)] <- paste(
+                        "is", 
+                        toString(category), 
+                        "*", 
+                        colnames(data)[i], 
+                        sep = ""
+                        )
+                }
+            } else {
+                output <- cbind(output, data[,i] * data[,j])
+                colnames(output)[ncol(output)] <- paste(
+                    colnames(data)[i], 
+                    "*", 
+                    colnames(data)[j], 
+                    sep = ""
+                    )
+            }
+        }
+    }
+    return(output)
+}
+model <- getDesignMatrix(data, append(1:4, 6:ncol(data)), cbind(6, 8, 11))
+
+originalCategorizedData <- data.frame(cbind(model[,2:ncol(model)], glyhb = originalData[sampledRows, 5]))
+originalCategorizedData
+
+
+subsets <- regsubsets(glyhb~., data=originalCategorizedData, nbest = 10, method = "exhaustive", nvmax = 20)
+summary(subsets)
+
+library(knitr)
+data <- originalCategorizedData
+Y <- originalCategorizedData$glyhb
+models <- regsubsets(glyhb~., data=originalCategorizedData, nbest = 10, method = "exhaustive", nvmax = 20)
+statistics <- summary(models)$which
+statistics <- cbind(statistics, RapSquared = summary(models)$adjr2)
+SSE <- summary(models)$rss
+n <- nrow(originalCategorizedData)
+p <- rowSums(summary(models)$which)
+AIC <- n*log(SSE)-n*log(n)+2*p
+BIC <- n*log(SSE)-n*log(n)+p*log(n)
+statistics <- cbind(statistics, AIC = AIC, BIC = BIC, Cp = summary(models)$cp)
+include = summary(models)$which[,-1]
+m = dim(include)[1]
+PRESS = rep(0,m)
+for (i in 1:m){
+  temp = which(include[i,])
+  reg = lm(Y~., data=data.frame(cbind(Y,data[,temp])))
+  PRESS[i] = sum((reg$residuals/(1 - lm.influence(reg)$hat))^2)
+}
+statistics <- cbind(statistics, PRESS = PRESS)
+# testing
+singleModel <- lm(Y ~ 1)
+SSE <- sum(singleModel$residuals^2)
+p <- 1
+SSTO <- function(Y) {
+    return(sum((Y-mean(Y))^2))
+}
+adjR2 <- 1-(SSE/(n-p))/(SSTO(Y)/(n-1))
+AIC <- n*log(SSE)-n*log(n)+2*p
+BIC <- n*log(SSE)-n*log(n)+p*log(n)
+
+modelF <- lm(Y~data[,1] + data[,2] + data[,3] + data[,4])
+SSE_F <- sum(modelF$residuals^2)
+MSE_F <- SSE_F/(n-5)
+
+Cp <- SSE/MSE_F - (n-2*p)
+PRESS <- sum((singleModel$residuals/(1 - lm.influence(singleModel)$hat))^2)
+kable(statistics)
+maxRap <- which.max(statistics[,"RapSquared"])
+minAIC <- which.min(statistics[,"AIC"])
+minBIC <- which.min(statistics[,"BIC"])
+minCp <- which.min(statistics[,"Cp"] - p)
+minPRESS <- which.min(statistics[,"PRESS"])
+kable(statistics[minAIC,])
 ```
+The model with the highest $R_{a, p}^2$ value is `r maxRap`. \
+The model with the minimum $\text{AIC}_{p}$ is `r minAIC`. \
+The model with the minimum $\text{BIC}_{p}$ is `r minBIC`. \
+The model with the minimum $C_p - p$ is `r minCp`. \
+The model with the minimum $\text{PRESS}_p$ value is `r minPRESS`.
+``` {r}
+#########################
+### DATA EVALUATION
+#########################
+plot(data)
 
-## Including Plots
+testmodel = lm(glyhb~., data=data)
+plot(testmodel)
 
-You can also embed plots, for example:
+library(MASS)
+boxcox(testmodel)
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+# Transformatrion = Y inverse based off boxcox graph
+
+Y_Transform_Log = log(Y)
+Y_Transform_Inv = (Y)^-1
+
+testmodel2 = lm(log(glyhb)~., data=data)
+plot(testmodel2)
+
+library(MASS)
+boxcox(testmodel2)
+
+##
+
+testmodel3 = lm(glyhb^-1~., data=data)
+plot(testmodel3)
+
+library(MASS)
+boxcox(testmodel3)
+
+
+
+
+par(mfrow=c(2,2))
+plot(testmodel) #Normal
+plot(testmodel2) #Log
+plot(testmodel3) #Inverse
+
 ```
-
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
