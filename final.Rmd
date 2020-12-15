@@ -22,9 +22,8 @@ library(leaps)
 originalData <- read.table("diabetes.txt", header = TRUE, sep = " ")
 sampledRows <- sort(sample(1:nrow(originalData), round(0.3 * nrow(originalData))))
 data <- originalData[sampledRows,]
-validationData <- originalData[!(1:nrow(originalData) %in% sampledRows), ]
-
-
+validationData <- originalData[-sampledRows,]
+validationData <- cbind(validationData[, -5], glyhb = validationData[, 5])
 
 # Input:
 #   data: a dataframe containing all the data available
@@ -110,19 +109,18 @@ getDesignMatrix <- function(data, allCols = cbind(), categoricalCols = cbind(), 
     }
     return(output)
 }
+
 model <- getDesignMatrix(data, append(1:4, 6:ncol(data)), cbind(6, 8, 11))
 
+# non transformed
 originalCategorizedData <- data.frame(cbind(model[,2:ncol(model)], glyhb = originalData[sampledRows, 5]))
 originalCategorizedData
 
 
-subsets <- regsubsets(glyhb~., data=originalCategorizedData, nbest = 10, method = "exhaustive", nvmax = 20)
-summary(subsets)
-
 library(knitr)
 data <- originalCategorizedData
 Y <- originalCategorizedData$glyhb
-models <- regsubsets(glyhb~., data=originalCategorizedData, nbest = 10, method = "exhaustive", nvmax = 20)
+models <- regsubsets(glyhb~., data=originalCategorizedData, nbest = 10, nvmax = 20)
 statistics <- summary(models)$which
 statistics <- cbind(statistics, RapSquared = summary(models)$adjr2)
 SSE <- summary(models)$rss
@@ -140,7 +138,6 @@ for (i in 1:m){
   PRESS[i] = sum((reg$residuals/(1 - lm.influence(reg)$hat))^2)
 }
 statistics <- cbind(statistics, PRESS = PRESS)
-# testing
 singleModel <- lm(Y ~ 1)
 SSE <- sum(singleModel$residuals^2)
 p <- 1
@@ -163,20 +160,194 @@ minAIC <- which.min(statistics[,"AIC"])
 minBIC <- which.min(statistics[,"BIC"])
 minCp <- which.min(statistics[,"Cp"] - p)
 minPRESS <- which.min(statistics[,"PRESS"])
-kable(statistics[minAIC,])
+kable(statistics[maxRap,])
+
+# Model Validation
+validationData
+validationY <- validationData[,"glyhb"]
+validationData <- getDesignMatrix(validationData, 1:(ncol(validationData) - 1), cbind(5, 7, 10))
+
+sel1 <- lm(glyhb~., data.frame(cbind(data[, which(as.logical(statistics[minBIC,2:17]))], glyhb = originalData[sampledRows, 5])))
+
+
+data_val = validationY
+n_val = length(validationY)
+
+sel1
+X1 = as.matrix(validationData[, which(as.logical(statistics[minBIC,1:17]))])
+X1
+sel1$coefficients
+Y1pred = X1 %*% as.numeric(sel1$coefficients)
+sum((Y1pred-validationY)^2)
+MSPR1 = sum((Y1pred-validationY)^2)/n_val
+MSPR1
 ```
 The model with the highest $R_{a, p}^2$ value is `r maxRap`. \
 The model with the minimum $\text{AIC}_{p}$ is `r minAIC`. \
 The model with the minimum $\text{BIC}_{p}$ is `r minBIC`. \
 The model with the minimum $C_p - p$ is `r minCp`. \
 The model with the minimum $\text{PRESS}_p$ value is `r minPRESS`.
+
+``` {r}
+# log transformation on Y
+originalCategorizedData <- data.frame(cbind(model[,2:ncol(model)], glyhb = originalData[sampledRows, 5]))
+originalCategorizedData
+
+
+library(knitr)
+data <- originalCategorizedData
+Y <- originalCategorizedData$glyhb
+models <- regsubsets(log(glyhb)~., data=originalCategorizedData, nbest = 10, method = "exhaustive", nvmax = 20)
+statistics <- summary(models)$which
+statistics <- cbind(statistics, RapSquared = summary(models)$adjr2)
+SSE <- summary(models)$rss
+n <- nrow(originalCategorizedData)
+p <- rowSums(summary(models)$which)
+AIC <- n*log(SSE)-n*log(n)+2*p
+BIC <- n*log(SSE)-n*log(n)+p*log(n)
+statistics <- cbind(statistics, AIC = AIC, BIC = BIC, Cp = summary(models)$cp)
+include = summary(models)$which[,-1]
+m = dim(include)[1]
+PRESS = rep(0,m)
+for (i in 1:m){
+  temp = which(include[i,])
+  reg = lm(Y~., data=data.frame(cbind(Y,data[,temp])))
+  PRESS[i] = sum((reg$residuals/(1 - lm.influence(reg)$hat))^2)
+}
+statistics <- cbind(statistics, PRESS = PRESS)
+singleModel <- lm(Y ~ 1)
+SSE <- sum(singleModel$residuals^2)
+p <- 1
+SSTO <- function(Y) {
+    return(sum((Y-mean(Y))^2))
+}
+adjR2 <- 1-(SSE/(n-p))/(SSTO(Y)/(n-1))
+AIC <- n*log(SSE)-n*log(n)+2*p
+BIC <- n*log(SSE)-n*log(n)+p*log(n)
+
+modelF <- lm(Y~data[,1] + data[,2] + data[,3] + data[,4])
+SSE_F <- sum(modelF$residuals^2)
+MSE_F <- SSE_F/(n-5)
+
+Cp <- SSE/MSE_F - (n-2*p)
+PRESS <- sum((singleModel$residuals/(1 - lm.influence(singleModel)$hat))^2)
+kable(statistics)
+maxRap <- which.max(statistics[,"RapSquared"])
+minAIC <- which.min(statistics[,"AIC"])
+minBIC <- which.min(statistics[,"BIC"])
+minCp <- which.min(statistics[,"Cp"] - p)
+minPRESS <- which.min(statistics[,"PRESS"])
+kable(statistics[maxRap,])
+
+# Model Validation
+
+sel1 <- lm(log(glyhb)~., data.frame(cbind(data[, which(as.logical(statistics[minBIC,2:17]))], glyhb = originalData[sampledRows, 5])))
+
+data_val = validationY
+n_val = length(validationY)
+
+sel1
+X1 = as.matrix(validationData[, which(as.logical(statistics[minBIC,1:17]))])
+X1
+sel1$coefficients
+Y1pred = X1 %*% as.numeric(sel1$coefficients)
+sum((Y1pred-log(validationY))^2)
+MSPR1 = sum((Y1pred-log(validationY))^2)/n_val
+MSPR1
+```
+The model with the highest $R_{a, p}^2$ value is `r maxRap`. \
+The model with the minimum $\text{AIC}_{p}$ is `r minAIC`. \
+The model with the minimum $\text{BIC}_{p}$ is `r minBIC`. \
+The model with the minimum $C_p - p$ is `r minCp`. \
+The model with the minimum $\text{PRESS}_p$ value is `r minPRESS`.
+
+``` {r}
+# Inverse transformation on Y
+originalCategorizedData <- data.frame(cbind(model[,2:ncol(model)], glyhb = originalData[sampledRows, 5]))
+originalCategorizedData
+
+library(knitr)
+data <- originalCategorizedData
+Y <- originalCategorizedData$glyhb
+models <- regsubsets(glyhb^-1~., data=originalCategorizedData, nbest = 10, method = "exhaustive", nvmax = 20)
+statistics <- summary(models)$which
+statistics <- cbind(statistics, RapSquared = summary(models)$adjr2)
+SSE <- summary(models)$rss
+n <- nrow(originalCategorizedData)
+p <- rowSums(summary(models)$which)
+AIC <- n*log(SSE)-n*log(n)+2*p
+BIC <- n*log(SSE)-n*log(n)+p*log(n)
+statistics <- cbind(statistics, AIC = AIC, BIC = BIC, Cp = summary(models)$cp)
+include = summary(models)$which[,-1]
+m = dim(include)[1]
+PRESS = rep(0,m)
+for (i in 1:m){
+  temp = which(include[i,])
+  reg = lm(Y~., data=data.frame(cbind(Y,data[,temp])))
+  PRESS[i] = sum((reg$residuals/(1 - lm.influence(reg)$hat))^2)
+}
+statistics <- cbind(statistics, PRESS = PRESS)
+singleModel <- lm(Y ~ 1)
+SSE <- sum(singleModel$residuals^2)
+p <- 1
+SSTO <- function(Y) {
+    return(sum((Y-mean(Y))^2))
+}
+adjR2 <- 1-(SSE/(n-p))/(SSTO(Y)/(n-1))
+AIC <- n*log(SSE)-n*log(n)+2*p
+BIC <- n*log(SSE)-n*log(n)+p*log(n)
+
+modelF <- lm(Y~data[,1] + data[,2] + data[,3] + data[,4])
+SSE_F <- sum(modelF$residuals^2)
+MSE_F <- SSE_F/(n-5)
+
+Cp <- SSE/MSE_F - (n-2*p)
+PRESS <- sum((singleModel$residuals/(1 - lm.influence(singleModel)$hat))^2)
+kable(statistics)
+maxRap <- which.max(statistics[,"RapSquared"])
+minAIC <- which.min(statistics[,"AIC"])
+minBIC <- which.min(statistics[,"BIC"])
+minCp <- which.min(statistics[,"Cp"] - p)
+minPRESS <- which.min(statistics[,"PRESS"])
+kable(statistics[maxRap,])
+
+# Model Validation
+
+sel1 <- lm(glyhb^-1~., data.frame(cbind(data[, which(as.logical(statistics[minBIC,2:17]))], glyhb = originalData[sampledRows, 5])))
+
+data_val = validationY
+n_val = length(validationY)
+
+sel1
+X1 = as.matrix(validationData[, which(as.logical(statistics[minBIC,1:17]))])
+X1
+sel1$coefficients
+Y1pred = X1 %*% as.numeric(sel1$coefficients)
+sum((Y1pred-(validationY^-1))^2)
+MSPR1 = sum((Y1pred-(validationY^-1))^2)/n_val
+MSPR1
+```
+The model with the highest $R_{a, p}^2$ value is `r maxRap`. \
+The model with the minimum $\text{AIC}_{p}$ is `r minAIC`. \
+The model with the minimum $\text{BIC}_{p}$ is `r minBIC`. \
+The model with the minimum $C_p - p$ is `r minCp`. \
+The model with the minimum $\text{PRESS}_p$ value is `r minPRESS`.
+
+
 ``` {r}
 #########################
 ### DATA EVALUATION
 #########################
+
+
+# non transformed
+originalCategorizedData <- data.frame(cbind(model[,2:ncol(model)], glyhb = originalData[sampledRows, 5]))
+
+data
 plot(data)
 
 testmodel = lm(glyhb~., data=data)
+testmodel
 plot(testmodel)
 
 library(MASS)
@@ -202,11 +373,53 @@ library(MASS)
 boxcox(testmodel3)
 
 
-
-
 par(mfrow=c(2,2))
 plot(testmodel) #Normal
 plot(testmodel2) #Log
 plot(testmodel3) #Inverse
+kable(data)
 
+# sel2
+# X2 = as.matrix(cbind(rep(1,n_val),data_val[,c(1,2,3,8)]))
+# Y2pred = X2 %% sel2$coefficients
+# sum((Y2pred-log(data_val$diabetes))^2)
+# MSPR2 = sum((Y2pred-log(data_val$diabetes))^2)/n_val
+# 
+# sel3
+# X3 = as.matrix(cbind(rep(1,n_val),data_val[,c(1,2,3,6,8)]))
+# Y3pred = X3 %% sel3$coefficients
+# sum((Y3pred-log(data_val$diabetes))^2)
+# MSPR3 = sum((Y3pred-log(data_val$diabetes))^2)/n_val
+# 
+# sel3
+# X4 = as.matrix(cbind(rep(1,n_val),data_val[,c(1,2,3,6,8)]))
+# Y4pred = X4 %% sel4$coefficients
+# sum((Y4pred-log(data_val$diabetes))^2)
+# MSPR4 = sum((Y4pred-log(data_val$diabetes))^2)/n_val
+# 
+# 
+# c(MSPR1, MSPR2, MSPR3,MSPR4)
+# plot(MSPR1, MSPR2, MSPR3,MSPR4)
+# 
+# 
+# 
+# sel1
+# sel2
+# sel3
+# Y_val = log(data_val$diabetes)
+# val1 = lm(Y_val~., data=data.frame(cbind(Y_val,data_val[,c(1,2,3,5,6,8)])))
+# val2 = lm(Y_val~., data=data.frame(cbind(Y_val,data_val[,c(1,2,3,8)])))
+# val3 = lm(Y_val~., data=data.frame(cbind(Y_val,data_val[,c(1,2,3,6,8)])))
+# 
+# summary(sel1)
+# summary(val1)
+# 
+# summary(sel2)
+# summary(val2)
+# 
+# summary(sel3)
+# summary(val3)
+# 
+# summary(sel4)
+# summary(val4)
 ```
