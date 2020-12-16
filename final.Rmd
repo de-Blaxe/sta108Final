@@ -9,15 +9,10 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## R Markdown
-
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
 ```{r cars}
 set.seed(108)
 library(leaps)
+manualModelSelection <- 36
 # Splitting data
 originalData <- read.table("diabetes.txt", header = TRUE, sep = " ")
 sampledRows <- sort(sample(1:nrow(originalData), round(0.3 * nrow(originalData))))
@@ -114,7 +109,7 @@ model <- getDesignMatrix(data, append(1:4, 6:ncol(data)), cbind(6, 8, 11))
 
 # non transformed
 originalCategorizedData <- data.frame(cbind(model[,2:ncol(model)], glyhb = originalData[sampledRows, 5]))
-originalCategorizedData
+# originalCategorizedData
 
 
 library(knitr)
@@ -163,24 +158,82 @@ minPRESS <- which.min(statistics[,"PRESS"])
 kable(statistics[maxRap,])
 
 # Model Validation
-validationData
+# validationData
 validationY <- validationData[,"glyhb"]
 validationData <- getDesignMatrix(validationData, 1:(ncol(validationData) - 1), cbind(5, 7, 10))
+# validationData
+trainingX <- as.matrix(cbind(1,data[, which(as.logical(statistics[manualModelSelection,2:17]))]))
+# trainingX
+trainingY <- as.matrix(originalData[sampledRows, 5])
+# trainingY
 
-sel1 <- lm(glyhb~., data.frame(cbind(data[, which(as.logical(statistics[minBIC,2:17]))], glyhb = originalData[sampledRows, 5])))
+sel1 <- lm(glyhb~., data.frame(cbind(data[, which(as.logical(statistics[manualModelSelection,2:17]))], glyhb = originalData[sampledRows, 5])))
 
 
 data_val = validationY
 n_val = length(validationY)
 
 sel1
-X1 = as.matrix(validationData[, which(as.logical(statistics[minBIC,1:17]))])
+X1 = as.matrix(validationData[, which(as.logical(statistics[manualModelSelection,1:17]))])
 X1
 sel1$coefficients
 Y1pred = X1 %*% as.numeric(sel1$coefficients)
 sum((Y1pred-validationY)^2)
 MSPR1 = sum((Y1pred-validationY)^2)/n_val
 MSPR1
+
+LSECoefficients <- function(X, Y) {
+  return(solve(t(X) %*% X) %*% t(X) %*% Y)
+}
+
+residuals <- function(X, Y) {
+    Y_hat <- X %*% LSECoefficients(X, Y)
+    return(Y - Y_hat)
+}
+
+SSE <- function(X, Y) {
+    e <- residuals(X, Y)
+    return((t(e) %*% e)[1, 1])
+}
+
+MSE <- function(X, Y) {
+    return(SSE(X, Y) / (nrow(X) - ncol(X)))
+}
+
+estimatorVariance <- function(X, Y) {
+    return(MSE(X,Y) * (solve(t(X) %*% X)))
+}
+
+varianceAtMean <- function(x, y, x_specifics, row_form) {
+    # x_specifics is defined as a column vector but the data will typically
+    # be in row form if selected from a data frame
+    if (row_form) {
+        x_specifics <- t(x_specifics)
+    }
+    return(t(x_specifics) %*% estimatorVariance(x, y) %*% x_specifics)
+}
+
+y_i_hat <- function(values, x, y) {
+    return(values %*% LSECoefficients(x, y))
+}
+
+Bonferroni_CI_mean <- function(confCoeff, x, y, x_specifics, row_form) {
+    if (row_form) {
+        x_specifics <- t(x_specifics)
+    }
+    P <- nrow(x_specifics)
+    B <- qt(1-((1-confCoeff)/(2 * ncol(x_specifics))), length(y) - P)
+    lower <- vector()
+    upper <- vector()
+    stdDev <- sqrt(diag(varianceAtMean(x, y, x_specifics, FALSE)))
+    offset <- B * stdDev
+    center <- y_i_hat(t(x_specifics), x, y)
+    return(data.frame('Lower Bound' = center - offset, 'Upper Bound' = center + offset))
+}
+# LSECoefficients(trainingX, trainingY)
+results <- cbind(X1, Bonferroni_CI_mean(.95, trainingX, trainingY, X1, T), actual = validationY)
+kable(results)
+nrow(results[(results[,"actual"] >= results[, "Lower.Bound"] & results[,"actual"] <= results[, "Upper.Bound"]),])/nrow(results)
 ```
 The model with the highest $R_{a, p}^2$ value is `r maxRap`. \
 The model with the minimum $\text{AIC}_{p}$ is `r minAIC`. \
@@ -191,7 +244,7 @@ The model with the minimum $\text{PRESS}_p$ value is `r minPRESS`.
 ``` {r}
 # log transformation on Y
 originalCategorizedData <- data.frame(cbind(model[,2:ncol(model)], glyhb = originalData[sampledRows, 5]))
-originalCategorizedData
+# originalCategorizedData
 
 
 library(knitr)
@@ -241,13 +294,13 @@ kable(statistics[maxRap,])
 
 # Model Validation
 
-sel1 <- lm(log(glyhb)~., data.frame(cbind(data[, which(as.logical(statistics[minBIC,2:17]))], glyhb = originalData[sampledRows, 5])))
+sel1 <- lm(log(glyhb)~., data.frame(cbind(data[, which(as.logical(statistics[manualModelSelection,2:17]))], glyhb = originalData[sampledRows, 5])))
 
 data_val = validationY
 n_val = length(validationY)
 
 sel1
-X1 = as.matrix(validationData[, which(as.logical(statistics[minBIC,1:17]))])
+X1 = as.matrix(validationData[, which(as.logical(statistics[manualModelSelection,1:17]))])
 X1
 sel1$coefficients
 Y1pred = X1 %*% as.numeric(sel1$coefficients)
@@ -310,22 +363,35 @@ minBIC <- which.min(statistics[,"BIC"])
 minCp <- which.min(statistics[,"Cp"] - p)
 minPRESS <- which.min(statistics[,"PRESS"])
 kable(statistics[maxRap,])
+manualModelSelection <- minPRESS
 
 # Model Validation
 
-sel1 <- lm(glyhb^-1~., data.frame(cbind(data[, which(as.logical(statistics[minBIC,2:17]))], glyhb = originalData[sampledRows, 5])))
+trainingX <- as.matrix(cbind(1,data[, which(as.logical(statistics[manualModelSelection,2:17]))]))
+# trainingX
+trainingY <- as.matrix(originalData[sampledRows, 5])^-1
+# trainingY
 
-data_val = validationY
+sel1 <- lm(glyhb^-1~., data.frame(cbind(data[, which(as.logical(statistics[manualModelSelection,2:17]))], glyhb = originalData[sampledRows, 5])))
 n_val = length(validationY)
 
 sel1
-X1 = as.matrix(validationData[, which(as.logical(statistics[minBIC,1:17]))])
+X1 = as.matrix(validationData[, which(as.logical(statistics[manualModelSelection,1:17]))])
 X1
 sel1$coefficients
 Y1pred = X1 %*% as.numeric(sel1$coefficients)
 sum((Y1pred-(validationY^-1))^2)
 MSPR1 = sum((Y1pred-(validationY^-1))^2)/n_val
 MSPR1
+
+SSE <- function(X, Y) {
+    e <- residuals(X, Y)
+    return((t(e) %*% e)[1, 1])
+}
+bonferroniBounds <- Bonferroni_CI_mean(.95, trainingX, trainingY, X1, T)
+results <- cbind(X1, bonferroniBounds, actual = validationY, adjLower=bonferroniBounds[,"Upper.Bound"] ^ -1, adjUpper = abs(bonferroniBounds[,"Lower.Bound"] ^ -1))
+kable(results)
+
 ```
 The model with the highest $R_{a, p}^2$ value is `r maxRap`. \
 The model with the minimum $\text{AIC}_{p}$ is `r minAIC`. \
